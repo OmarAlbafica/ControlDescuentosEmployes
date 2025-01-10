@@ -1,0 +1,24 @@
+{
+  "TimeOutSession": 1440,
+  "AuthorizedUsers": [
+    {
+      "User": "Usuario",
+      "Password": "1512"
+    },
+    {
+      "User": "Test",
+      "Password": "Test"
+    }
+  ],
+  "Oracle": {
+    "Server": "10.1.0.15",
+    "Port": "1521",
+    "Database": "RPROODS",
+    "Username": "REPORTUSER",
+    "Password": "report",
+    "TimeOut": 1000
+  },
+  "Time": {
+    "ExecutionInterval": 2
+  }
+}
