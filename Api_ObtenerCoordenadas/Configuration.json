@@ -8,10 +8,14 @@
     {
       "User": "Test",
       "Password": "Test"
+    },
+    {
+      "User": "SYSADMIN",
+      "Password": "Ejje2025"
     }
   ],
   "Oracle": {
-    "Server": "10.1.0.15",
+    "Server": "192.168.0.44",
     "Port": "1521",
     "Database": "RPROODS",
     "Username": "REPORTUSER",

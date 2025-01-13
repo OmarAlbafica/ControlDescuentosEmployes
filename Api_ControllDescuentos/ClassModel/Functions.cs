@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Data;
 using System.Data.Entity.Core.Common.CommandTrees.ExpressionBuilder;
 using System.Data.SqlClient;
 using System.Linq;
@@ -10,6 +11,7 @@ using CSID;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Oracle.ManagedDataAccess.Client;
+using Oracle.ManagedDataAccess.Types;
 
 namespace ClassModel
 {
@@ -3854,11 +3856,53 @@ namespace ClassModel
                     context.Database.Connection.Open();
 
                     // Consultar todas las tiendas
-                    stores = context.Database.SqlQuery<Store>(SelectAllStores()).ToList();
+                    using (var command = context.Database.Connection.CreateCommand())
+                    {
+                        command.CommandText = SelectAllStores();
+                        using (var reader = command.ExecuteReader())
+                        {
+                            while (reader.Read())
+                            {
+                                var store = new Store
+                                {
+                                    SidStore = reader.IsDBNull(0) ? null : reader.GetString(0),
+                                    StoreNo = reader.IsDBNull(1) ? null : reader.GetString(1),
+                                    StoreName = reader.IsDBNull(2) ? null : reader.GetString(2),
+                                    SbsSid = reader.IsDBNull(3) ? null : reader.GetString(3),
+                                    SbsNo = reader.IsDBNull(4) ? null : reader.GetString(4),
+                                    SbsName = reader.IsDBNull(5) ? null : reader.GetString(5),
+                                    FullName = reader.IsDBNull(6) ? null : reader.GetString(6)
+                                };
+                                stores.Add(store);
+                            }
+                        }
+                    }
+
                     Config.MyLog("GetStoresAndEmployees", "Stores Query", $"Stores found: {stores.Count}", AConfig.EnableLog, $"{CorrelationId}_");
 
                     // Consultar todos los empleados
-                    employees = context.Database.SqlQuery<Employee>(SelectAllEmployees()).ToList();
+                    using (var command = context.Database.Connection.CreateCommand())
+                    {
+                        command.CommandText = SelectAllEmployees();
+                        using (var reader = command.ExecuteReader())
+                        {
+                            while (reader.Read())
+                            {
+                                var employee = new Employee
+                                {
+                                    CustSid = reader.IsDBNull(0) ? null : reader.GetString(0),
+                                    EmplName = reader.IsDBNull(1) ? null : reader.GetString(1),
+                                    SidEmployee = reader.IsDBNull(2) ? null : reader.GetString(2),
+                                    SidCustomer = reader.IsDBNull(3) ? null : reader.GetString(3),
+                                    FullName = reader.IsDBNull(4) ? null : reader.GetString(4),
+                                    StoreSid = reader.IsDBNull(5) ? null : reader.GetString(5),
+                                    SbsSid = reader.IsDBNull(6) ? null : reader.GetString(6)
+                                };
+                                employees.Add(employee);
+                            }
+                        }
+                    }
+
                     Config.MyLog("GetStoresAndEmployees", "Employees Query", $"Employees found: {employees.Count}", AConfig.EnableLog, $"{CorrelationId}_");
 
                     context.Database.Connection.Close();
@@ -3907,16 +3951,408 @@ namespace ClassModel
             return FResponse;
         }
 
+        public FResponse GetUsers(string Token, string CorrelationId, string search = null)
+        {
+            FResponse FResponse = new FResponse();
+            List<User> users = new List<User>();
+
+            try
+            {
+                Config.MyLog("GetUsers", "Token", Token, AConfig.EnableLog, $"{CorrelationId}_");
+
+                FResponse RespDecrypt = DecryptToken(Token, CorrelationId);
+                if (!RespDecrypt.Response.Status)
+                {
+                    Config.MyLog("GetUsers", "Token Decrypt Failure", RespDecrypt.Response.Message, AConfig.EnableLog, $"{CorrelationId}_");
+                    return RespDecrypt;
+                }
+
+                Session CSession = JsonConvert.DeserializeObject<Session>(RespDecrypt.Response.Result);
+
+                if (DateTime.Parse(CSession.FinalDate) < DateTime.Now)
+                {
+                    FResponse.Response = HandleError("GetUsers", "The session has expired. Generate a new token", null, CorrelationId);
+                    FResponse.StatusCode = HttpStatusCode.Unauthorized;
+                    Config.MyLog("GetUsers", "Session Expired", "Session has expired. Generate a new token", AConfig.EnableLog, $"{CorrelationId}_");
+                    return FResponse;
+                }
+
+                using (var connection = new OracleConnection(Connection))
+                {
+                    connection.Open();
+                    string query = "SELECT ID, NOMBRE, EMAIL FROM USUARIO_CONTROL_DESCUENTO WHERE ISADMIN = 0";
+
+                    if (!string.IsNullOrEmpty(search))
+                    {
+                        query += " AND (NOMBRE LIKE :search OR EMAIL LIKE :search)";
+                    }
+
+                    using (var command = new OracleCommand(query, connection))
+                    {
+                        if (!string.IsNullOrEmpty(search))
+                        {
+                            command.Parameters.Add(new OracleParameter("search", $"%{search}%"));
+                        }
+
+                        using (var reader = command.ExecuteReader())
+                        {
+                            while (reader.Read())
+                            {
+                                users.Add(new User
+                                {
+                                    Id = reader.GetInt32(0),
+                                    Name = reader.GetString(1),
+                                    Email = reader.GetString(2)
+                                });
+                            }
+                        }
+                    }
+                }
+
+                FResponse.Response.Status = true;
+                FResponse.Response.Message = "Information obtained successfully";
+                FResponse.Response.Result = users;
+                FResponse.StatusCode = HttpStatusCode.OK;
+                Config.MyLog("GetUsers", "Success", "Information obtained successfully", AConfig.EnableLog, $"{CorrelationId}_");
+
+            }
+            catch (Exception ex)
+            {
+                string ErrorMessage = ex.InnerException == null ? ex.Message : ex.InnerException.InnerException == null ? ex.InnerException.Message : ex.InnerException.InnerException.Message;
+
+                Config.MyLog("GetUsers", "Error", ErrorMessage, true, $"{CorrelationId}_");
+
+                FResponse.Response.Status = false;
+                FResponse.Response.Message = ErrorMessage;
+                FResponse.Response.Result = null;
+                FResponse.StatusCode = HttpStatusCode.InternalServerError;
+            }
+
+            return FResponse;
+        }
+
+        public FResponse UpdateUser(string Token, string CorrelationId, UserUpdateRequest request)
+        {
+            FResponse FResponse = new FResponse();
+
+            try
+            {
+                Config.MyLog("UpdateUser", "Token", Token, AConfig.EnableLog, $"{CorrelationId}_");
+
+                FResponse RespDecrypt = DecryptToken(Token, CorrelationId);
+                if (!RespDecrypt.Response.Status)
+                {
+                    Config.MyLog("UpdateUser", "Token Decrypt Failure", RespDecrypt.Response.Message, AConfig.EnableLog, $"{CorrelationId}_");
+                    return RespDecrypt;
+                }
+
+                Session CSession = JsonConvert.DeserializeObject<Session>(RespDecrypt.Response.Result);
+
+                if (DateTime.Parse(CSession.FinalDate) < DateTime.Now)
+                {
+                    FResponse.Response = HandleError("UpdateUser", "The session has expired. Generate a new token", null, CorrelationId);
+                    FResponse.StatusCode = HttpStatusCode.Unauthorized;
+                    Config.MyLog("UpdateUser", "Session Expired", "Session has expired. Generate a new token", AConfig.EnableLog, $"{CorrelationId}_");
+                    return FResponse;
+                }
+
+                string hashedPassword = Config.Encriptar_conKey(request.Password, "MD5", "ControlDescuentosEJJE");
+
+                using (var connection = new OracleConnection(Connection))
+                {
+                    connection.Open();
+                    string query = "UPDATE USUARIO_CONTROL_DESCUENTO SET NOMBRE = :Name, EMAIL = :Email, PASSWORD = :Password WHERE ID = :Id";
+                    using (var command = new OracleCommand(query, connection))
+                    {
+                        command.Parameters.Add(new OracleParameter("Name", request.Name));
+                        command.Parameters.Add(new OracleParameter("Email", request.Email));
+                        command.Parameters.Add(new OracleParameter("Password", hashedPassword));
+                        command.Parameters.Add(new OracleParameter("Id", request.Id));
+
+                        int rowsAffected = command.ExecuteNonQuery();
+                        if (rowsAffected > 0)
+                        {
+                            FResponse.Response.Status = true;
+                            FResponse.Response.Message = "User updated successfully";
+                            FResponse.Response.Result = rowsAffected;
+                            FResponse.StatusCode = HttpStatusCode.OK;
+                            Config.MyLog("UpdateUser", "Success", "User updated successfully", AConfig.EnableLog, $"{CorrelationId}_");
+                        }
+                        else
+                        {
+                            FResponse.Response.Status = false;
+                            FResponse.Response.Message = "User not found";
+                            FResponse.Response.Result = null;
+                            FResponse.StatusCode = HttpStatusCode.NotFound;
+                            Config.MyLog("UpdateUser", "Failure", "User not found", AConfig.EnableLog, $"{CorrelationId}_");
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                string ErrorMessage = ex.InnerException == null ? ex.Message : ex.InnerException.InnerException == null ? ex.InnerException.Message : ex.InnerException.InnerException.Message;
+
+                Config.MyLog("UpdateUser", "Error", ErrorMessage, true, $"{CorrelationId}_");
+
+                FResponse.Response.Status = false;
+                FResponse.Response.Message = ErrorMessage;
+                FResponse.Response.Result = null;
+                FResponse.StatusCode = HttpStatusCode.InternalServerError;
+            }
+
+            return FResponse;
+        }
+
+        public FResponse CreateUser(string Token, string CorrelationId, UserCreateRequest request)
+        {
+            FResponse FResponse = new FResponse();
+
+            try
+            {
+                Config.MyLog("CreateUser", "Token", Token, AConfig.EnableLog, $"{CorrelationId}_");
+
+                FResponse RespDecrypt = DecryptToken(Token, CorrelationId);
+                if (!RespDecrypt.Response.Status)
+                {
+                    Config.MyLog("CreateUser", "Token Decrypt Failure", RespDecrypt.Response.Message, AConfig.EnableLog, $"{CorrelationId}_");
+                    return RespDecrypt;
+                }
+
+                Session CSession = JsonConvert.DeserializeObject<Session>(RespDecrypt.Response.Result);
+
+                if (DateTime.Parse(CSession.FinalDate) < DateTime.Now)
+                {
+                    FResponse.Response = HandleError("CreateUser", "The session has expired. Generate a new token", null, CorrelationId);
+                    FResponse.StatusCode = HttpStatusCode.Unauthorized;
+                    Config.MyLog("CreateUser", "Session Expired", "Session has expired. Generate a new token", AConfig.EnableLog, $"{CorrelationId}_");
+                    return FResponse;
+                }
+
+                using (var connection = new OracleConnection(Connection))
+                {
+                    connection.Open();
+
+                    // Verificar si ya existe un usuario con el mismo correo electrónico
+                    string checkQuery = "SELECT COUNT(*) FROM USUARIO_CONTROL_DESCUENTO WHERE EMAIL = :Email";
+                    using (var checkCommand = new OracleCommand(checkQuery, connection))
+                    {
+                        checkCommand.Parameters.Add(new OracleParameter("Email", request.Email));
+                        int userCount = Convert.ToInt32(checkCommand.ExecuteScalar());
+
+                        if (userCount > 0)
+                        {
+                            FResponse.Response.Status = false;
+                            FResponse.Response.Message = "A user with this email already exists";
+                            FResponse.Response.Result = null;
+                            FResponse.StatusCode = HttpStatusCode.Conflict;
+                            Config.MyLog("CreateUser", "Failure", "A user with this email already exists", AConfig.EnableLog, $"{CorrelationId}_");
+                            return FResponse;
+                        }
+                    }
+
+                    string hashedPassword = Config.Encriptar_conKey(request.Password, "MD5", "ControlDescuentosEJJE");
+                    string query = "INSERT INTO USUARIO_CONTROL_DESCUENTO (NOMBRE, EMAIL, PASSWORD, ISADMIN, FECHA_CREACION) VALUES (:Name, :Email, :Password, 0, CURRENT_TIMESTAMP)";
+                    using (var command = new OracleCommand(query, connection))
+                    {
+                        command.Parameters.Add(new OracleParameter("Name", request.Name));
+                        command.Parameters.Add(new OracleParameter("Email", request.Email));
+                        command.Parameters.Add(new OracleParameter("Password", hashedPassword));
+
+                        int rowsAffected = command.ExecuteNonQuery();
+                        if (rowsAffected > 0)
+                        {
+                            FResponse.Response.Status = true;
+                            FResponse.Response.Message = "User created successfully";
+                            FResponse.Response.Result = rowsAffected;
+                            FResponse.StatusCode = HttpStatusCode.Created;
+                            Config.MyLog("CreateUser", "Success", "User created successfully", AConfig.EnableLog, $"{CorrelationId}_");
+                        }
+                        else
+                        {
+                            FResponse.Response.Status = false;
+                            FResponse.Response.Message = "User creation failed";
+                            FResponse.Response.Result = null;
+                            FResponse.StatusCode = HttpStatusCode.BadRequest;
+                            Config.MyLog("CreateUser", "Failure", "User creation failed", AConfig.EnableLog, $"{CorrelationId}_");
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                string ErrorMessage = ex.InnerException == null ? ex.Message : ex.InnerException.InnerException == null ? ex.InnerException.Message : ex.InnerException.InnerException.Message;
+
+                Config.MyLog("CreateUser", "Error", ErrorMessage, true, $"{CorrelationId}_");
+
+                FResponse.Response.Status = false;
+                FResponse.Response.Message = ErrorMessage;
+                FResponse.Response.Result = null;
+                FResponse.StatusCode = HttpStatusCode.InternalServerError;
+            }
+
+            return FResponse;
+        }
+
+        public FResponse DeleteUser(string Token, string CorrelationId, int userId)
+        {
+            FResponse FResponse = new FResponse();
+
+            try
+            {
+                Config.MyLog("DeleteUser", "Token", Token, AConfig.EnableLog, $"{CorrelationId}_");
+
+                FResponse RespDecrypt = DecryptToken(Token, CorrelationId);
+                if (!RespDecrypt.Response.Status)
+                {
+                    Config.MyLog("DeleteUser", "Token Decrypt Failure", RespDecrypt.Response.Message, AConfig.EnableLog, $"{CorrelationId}_");
+                    return RespDecrypt;
+                }
+
+                Session CSession = JsonConvert.DeserializeObject<Session>(RespDecrypt.Response.Result);
+
+                if (DateTime.Parse(CSession.FinalDate) < DateTime.Now)
+                {
+                    FResponse.Response = HandleError("DeleteUser", "The session has expired. Generate a new token", null, CorrelationId);
+                    FResponse.StatusCode = HttpStatusCode.Unauthorized;
+                    Config.MyLog("DeleteUser", "Session Expired", "Session has expired. Generate a new token", AConfig.EnableLog, $"{CorrelationId}_");
+                    return FResponse;
+                }
+
+                using (var connection = new OracleConnection(Connection))
+                {
+                    connection.Open();
+                    string query = "DELETE FROM USUARIO_CONTROL_DESCUENTO WHERE ID = :Id";
+                    using (var command = new OracleCommand(query, connection))
+                    {
+                        command.Parameters.Add(new OracleParameter("Id", userId));
+
+                        int rowsAffected = command.ExecuteNonQuery();
+                        if (rowsAffected > 0)
+                        {
+                            FResponse.Response.Status = true;
+                            FResponse.Response.Message = "User deleted successfully";
+                            FResponse.Response.Result = rowsAffected;
+                            FResponse.StatusCode = HttpStatusCode.OK;
+                            Config.MyLog("DeleteUser", "Success", "User deleted successfully", AConfig.EnableLog, $"{CorrelationId}_");
+                        }
+                        else
+                        {
+                            FResponse.Response.Status = false;
+                            FResponse.Response.Message = "User not found";
+                            FResponse.Response.Result = null;
+                            FResponse.StatusCode = HttpStatusCode.NotFound;
+                            Config.MyLog("DeleteUser", "Failure", "User not found", AConfig.EnableLog, $"{CorrelationId}_");
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                string ErrorMessage = ex.InnerException == null ? ex.Message : ex.InnerException.InnerException == null ? ex.InnerException.Message : ex.InnerException.InnerException.Message;
+
+                Config.MyLog("DeleteUser", "Error", ErrorMessage, true, $"{CorrelationId}_");
+
+                FResponse.Response.Status = false;
+                FResponse.Response.Message = ErrorMessage;
+                FResponse.Response.Result = null;
+                FResponse.StatusCode = HttpStatusCode.InternalServerError;
+            }
+
+            return FResponse;
+        }
+
+
+        public FResponse GetValidToken(string Token, string CorrelationId)
+        {
+            FResponse FResponse = new FResponse();
+            List<Store> stores = new List<Store>();
+
+            try
+            {
+                Config.MyLog("GetValidToken", "Token", Token, AConfig.EnableLog, $"{CorrelationId}_");
+
+                FResponse RespDecrypt = DecryptToken(Token, CorrelationId);
+                if (!RespDecrypt.Response.Status)
+                {
+                    Config.MyLog("GetValidToken", "Token Decrypt Failure", RespDecrypt.Response.Message, AConfig.EnableLog, $"{CorrelationId}_");
+                    return RespDecrypt;
+                }
+
+                Session CSession = JsonConvert.DeserializeObject<Session>(RespDecrypt.Response.Result);
+
+                if (DateTime.Parse(CSession.FinalDate) < DateTime.Now)
+                {
+                    FResponse.Response = HandleError("GetValidToken", "The session has expired. Generate a new token", null, CorrelationId);
+                    FResponse.StatusCode = HttpStatusCode.Unauthorized;
+                    Config.MyLog("GetValidToken", "Session Expired", "Session has expired. Generate a new token", AConfig.EnableLog, $"{CorrelationId}_");
+                    return FResponse;
+                }
+
+                FResponse.Response.Status = true;
+                FResponse.Response.Message = "Information obtained successfully";
+                FResponse.Response.Result = 1;
+                FResponse.StatusCode = HttpStatusCode.OK;
+                Config.MyLog("GetValidToken", "Success", "Information obtained successfully", AConfig.EnableLog, $"{CorrelationId}_");
+
+            }
+            catch (Exception ex)
+            {
+                string ErrorMessage = ex.InnerException == null ? ex.Message : ex.InnerException.InnerException == null ? ex.InnerException.Message : ex.InnerException.InnerException.Message;
+
+                Config.MyLog("GetValidToken", "Error", ErrorMessage, true, $"{CorrelationId}_");
+
+                FResponse.Response.Status = false;
+                FResponse.Response.Message = ErrorMessage;
+                FResponse.Response.Result = null;
+                FResponse.StatusCode = HttpStatusCode.InternalServerError;
+            }
+
+            return FResponse;
+        }
+
+
         public string SelectAllStores()
         {
-            string Sql = "SELECT StoreSid, StoreName FROM Store WHERE ACTIVE = 1";
+            string Sql = @"
+    SELECT 
+        TO_CHAR(s.SID) AS SidStore,
+        TO_CHAR(s.STORE_NO) AS StoreNo,
+        TO_CHAR(s.STORE_NAME) AS StoreName,
+        TO_CHAR(s.SBS_SID) AS SbsSid,
+        TO_CHAR(sub.SBS_NO) AS SbsNo,
+        TO_CHAR(sub.SBS_NAME) AS SbsName,
+        TO_CHAR(s.STORE_NAME || ' - ' || sub.SBS_NAME) AS FullName
+    FROM 
+        RPS.STORE s
+    LEFT JOIN 
+        RPS.SUBSIDIARY sub
+    ON 
+        s.SBS_SID = sub.SID
+    WHERE
+        s.ACTIVE = 1";
             Config.MyLog("SelectAllStores", "Query", Sql, true, "");
             return Sql;
         }
-
         public string SelectAllEmployees()
         {
-            string Sql = "SELECT EmployeeSid, EmployeeName, StoreSid FROM Employee WHERE ACTIVE = 1";
+            string Sql = @"
+    SELECT 
+        TO_CHAR(e.CUST_SID) AS CustSid,
+        TO_CHAR(e.EMPL_NAME) AS EmplName,
+        TO_CHAR(e.SID) AS SidEmployee,
+        TO_CHAR(c.SID) AS SidCustomer,
+        TO_CHAR(c.FIRST_NAME || ' ' || c.LAST_NAME) AS FullName,
+        TO_CHAR(c.STORE_SID) AS StoreSid,
+        TO_CHAR(e.SBS_SID) AS SbsSid
+    FROM 
+        RPS.employee e
+    LEFT JOIN 
+        RPS.customer c
+    ON 
+        e.CUST_SID = c.SID
+    WHERE
+        e.USER_ACTIVE = 1";
             Config.MyLog("SelectAllEmployees", "Query", Sql, true, "");
             return Sql;
         }
@@ -4331,14 +4767,14 @@ namespace ClassModel
                     };
 
                     string Juser = JsonConvert.SerializeObject(NewSession);
-                    string JencryptedUser = Config.Encriptar_conKey(Juser, "MD5", "ControlDescuentosEJJE");
+                    string token = Config.Encriptar_conKey(Juser, "MD5", "ControlDescuentosEJJE");
 
                     FResponse.Response.Status = true;
                     FResponse.Response.Message = "Token generated";
-                    FResponse.Response.Result = JencryptedUser;
+                    FResponse.Response.Result = new { token, user.isadmin };
 
                     FResponse.StatusCode = HttpStatusCode.OK;
-                    Config.MyLog("LoginUsuarioControlDescuento", "Token", FResponse.Response.Result, AConfig.EnableLog, $"{CorrelationId}_");
+                    Config.MyLog("LoginUsuarioControlDescuento", "Token", token, AConfig.EnableLog, $"{CorrelationId}_");
                 }
             }
             catch (Exception ex)
@@ -4365,7 +4801,7 @@ namespace ClassModel
         {
             // Consulta SQL con interpolación directa de parámetros
             string Sql = $@"
-        SELECT id, nombre, email, password
+        SELECT id, nombre, email, password, isadmin 
         FROM Usuario_Control_Descuento
         WHERE email = '{Email}'";
 
@@ -4416,6 +4852,746 @@ namespace ClassModel
                 FResponse.StatusCode = HttpStatusCode.InternalServerError;
 
                 
+            }
+
+            return FResponse;
+        }
+
+        public FResponse GetUsersFromCoordenada(string Token, string CorrelationId, string search = null)
+        {
+            FResponse FResponse = new FResponse();
+            List<UserCoordenada> users = new List<UserCoordenada>();
+
+            try
+            {
+                Config.MyLog("GetUsersFromCoordenada", "Token", Token, AConfig.EnableLog, $"{CorrelationId}_");
+
+                FResponse RespDecrypt = DecryptToken(Token, CorrelationId);
+                if (!RespDecrypt.Response.Status)
+                {
+                    Config.MyLog("GetUsersFromCoordenada", "Token Decrypt Failure", RespDecrypt.Response.Message, AConfig.EnableLog, $"{CorrelationId}_");
+                    return RespDecrypt;
+                }
+
+                Session CSession = JsonConvert.DeserializeObject<Session>(RespDecrypt.Response.Result);
+
+                if (DateTime.Parse(CSession.FinalDate) < DateTime.Now)
+                {
+                    FResponse.Response = HandleError("GetUsersFromCoordenada", "The session has expired. Generate a new token", null, CorrelationId);
+                    FResponse.StatusCode = HttpStatusCode.Unauthorized;
+                    Config.MyLog("GetUsersFromCoordenada", "Session Expired", "Session has expired. Generate a new token", AConfig.EnableLog, $"{CorrelationId}_");
+                    return FResponse;
+                }
+
+                using (var connection = new OracleConnection(Connection))
+                {
+                    connection.Open();
+                    string query = "SELECT ID, EMAIL, TO_CHAR(SID), TIENDA, MAX_DESCUENTO, CICLO_COORDENADA FROM USUARIO_COORDENADA";
+
+                    if (!string.IsNullOrEmpty(search))
+                    {
+                        query += " WHERE EMAIL LIKE :search OR TIENDA LIKE :search";
+                    }
+
+                    using (var command = new OracleCommand(query, connection))
+                    {
+                        if (!string.IsNullOrEmpty(search))
+                        {
+                            command.Parameters.Add(new OracleParameter("search", $"%{search}%"));
+                        }
+
+                        using (var reader = command.ExecuteReader())
+                        {
+                            while (reader.Read())
+                            {
+                                users.Add(new UserCoordenada
+                                {
+                                    Id = reader.GetInt32(0),
+                                    Email = reader.GetString(1),
+                                    Sid = reader.GetString(2), // Cambiado a GetString para TO_CHAR
+                                    Tienda = reader.GetString(3),
+                                    MaxDescuento = reader.GetInt32(4),
+                                    CicloCoordenada = reader.GetInt32(5)
+                                });
+                            }
+                        }
+                    }
+                }
+
+                FResponse.Response.Status = true;
+                FResponse.Response.Message = "Information obtained successfully";
+                FResponse.Response.Result = users;
+                FResponse.StatusCode = HttpStatusCode.OK;
+                Config.MyLog("GetUsersFromCoordenada", "Success", "Information obtained successfully", AConfig.EnableLog, $"{CorrelationId}_");
+
+            }
+            catch (Exception ex)
+            {
+                string ErrorMessage = ex.InnerException == null ? ex.Message : ex.InnerException.InnerException == null ? ex.InnerException.Message : ex.InnerException.InnerException.Message;
+
+                Config.MyLog("GetUsersFromCoordenada", "Error", ErrorMessage, true, $"{CorrelationId}_");
+
+                FResponse.Response.Status = false;
+                FResponse.Response.Message = ErrorMessage;
+                FResponse.Response.Result = null;
+                FResponse.StatusCode = HttpStatusCode.InternalServerError;
+            }
+
+            return FResponse;
+        }
+
+        public FResponse CrearUsuarioCoordenada(string Token, UsuarioCoordenada usuario, string CorrelationId)
+        {
+            FResponse FResponse = new FResponse();
+
+            try
+            {
+                Config.MyLog("CrearUsuarioCoordenada", "Token", Token, AConfig.EnableLog, $"{CorrelationId}_");
+
+                FResponse RespDecrypt = DecryptToken(Token, CorrelationId);
+                if (!RespDecrypt.Response.Status)
+                {
+                    Config.MyLog("CrearUsuarioCoordenada", "Token Decrypt Failure", RespDecrypt.Response.Message, AConfig.EnableLog, $"{CorrelationId}_");
+                    return RespDecrypt;
+                }
+
+                Session CSession = JsonConvert.DeserializeObject<Session>(RespDecrypt.Response.Result);
+
+                if (DateTime.Parse(CSession.FinalDate) < DateTime.Now)
+                {
+                    FResponse.Response = HandleError("CrearUsuarioCoordenada", "The session has expired. Generate a new token", null, CorrelationId);
+                    FResponse.StatusCode = HttpStatusCode.Unauthorized;
+                    Config.MyLog("CrearUsuarioCoordenada", "Session Expired", "Session has expired. Generate a new token", AConfig.EnableLog, $"{CorrelationId}_");
+                    return FResponse;
+                }
+
+                using (var context = new ModelOracle(Connection, Schema))
+                {
+                    context.Database.Connection.Open();
+
+                    // Verificar si el SID y la Tienda ya existen en la base de datos
+                    string checkQuery = "SELECT COUNT(1) FROM USUARIO_COORDENADA WHERE SID = :Sid AND TIENDA = :Tienda";
+                    Config.MyLog("CrearUsuarioCoordenada", "Check Query", checkQuery, true, $"{CorrelationId}_");
+
+                    int existingUserCount = context.Database.SqlQuery<int>(
+                        checkQuery,
+                        new OracleParameter("Sid", usuario.Sid),
+                        new OracleParameter("Tienda", usuario.Tienda)
+                    ).FirstOrDefault();
+
+                    if (existingUserCount > 0)
+                    {
+                        FResponse.Response.Status = false;
+                        FResponse.Response.Message = "El usuario con el SID y la Tienda especificados ya está registrado";
+                        FResponse.StatusCode = HttpStatusCode.BadRequest;
+                        Config.MyLog("CrearUsuarioCoordenada", "User Exists", "User with specified SID and Tienda already registered", AConfig.EnableLog, $"{CorrelationId}_");
+                        return FResponse;
+                    }
+
+                    // Insertar el nuevo usuario y obtener el ID generado
+                    string insertQuery = @"
+        INSERT INTO USUARIO_COORDENADA (EMAIL, SID, TIENDA, MAX_DESCUENTO, CICLO_COORDENADA, SUBSIDIARIA)
+        VALUES (:Email, :Sid, :Tienda, :MaxDescuento, :CicloCoordenada, :Subsidiaria)
+        RETURNING ID INTO :Id";
+
+                    Config.MyLog("CrearUsuarioCoordenada", "Insert Query", insertQuery, true, $"{CorrelationId}_");
+
+                    var idParameter = new OracleParameter("Id", OracleDbType.Int32, ParameterDirection.Output);
+
+                    context.Database.ExecuteSqlCommand(
+                        insertQuery,
+                        new OracleParameter("Email", usuario.Email),
+                        new OracleParameter("Sid", usuario.Sid),
+                        new OracleParameter("Tienda", usuario.Tienda),
+                        new OracleParameter("MaxDescuento", usuario.MaxDescuento),
+                        new OracleParameter("CicloCoordenada", usuario.CicloCoordenada),
+                        new OracleParameter("Subsidiaria", usuario.Subsidiaria),
+                        idParameter
+                    );
+
+                    int newUserId = ((OracleDecimal)idParameter.Value).ToInt32();
+
+                    context.Database.Connection.Close();
+                    Config.MyLog("CrearUsuarioCoordenada", "Success", "Usuario creado exitosamente", AConfig.EnableLog, $"{CorrelationId}_");
+
+                    FResponse.Response.Status = true;
+                    FResponse.Response.Message = "Usuario creado exitosamente";
+                    FResponse.Response.Result = new { mensaje = "Usuario creado exitosamente", idUserCoordenada = newUserId };
+                    FResponse.StatusCode = HttpStatusCode.OK;
+                }
+            }
+            catch (Exception ex)
+            {
+                string ErrorMessage = ex.InnerException == null ? ex.Message : ex.InnerException.InnerException == null ? ex.InnerException.Message : ex.InnerException.InnerException.Message;
+
+                Config.MyLog("CrearUsuarioCoordenada", "Error", ErrorMessage, true, $"{CorrelationId}_");
+
+                FResponse.Response.Status = false;
+                FResponse.Response.Message = ErrorMessage;
+                FResponse.StatusCode = HttpStatusCode.InternalServerError;
+            }
+
+            return FResponse;
+        }
+        public FResponse ActualizarUsuarioCoordenada(string Token, UsuarioCoordenada usuario, string CorrelationId)
+        {
+            FResponse FResponse = new FResponse();
+
+            try
+            {
+                Config.MyLog("ActualizarUsuarioCoordenada", "Token", Token, AConfig.EnableLog, $"{CorrelationId}_");
+
+                FResponse RespDecrypt = DecryptToken(Token, CorrelationId);
+                if (!RespDecrypt.Response.Status)
+                    return RespDecrypt;
+
+                Session CSession = JsonConvert.DeserializeObject<Session>(RespDecrypt.Response.Result);
+
+                if (DateTime.Parse(CSession.FinalDate) < DateTime.Now)
+                {
+                    FResponse.Response = HandleError("ActualizarUsuarioCoordenada", "The session has expired. Generate a new token", null, CorrelationId);
+                    FResponse.StatusCode = HttpStatusCode.Unauthorized;
+                    return FResponse;
+                }
+
+                using (var context = new ModelOracle(Connection, Schema))
+                {
+                    context.Database.Connection.Open();
+
+                    // Actualizar el usuario
+                    string updateQuery = @"
+        UPDATE USUARIO_COORDENADA
+        SET EMAIL = :Email, 
+            MAX_DESCUENTO = :MaxDescuento, 
+            CICLO_COORDENADA = :CicloCoordenada,
+            TIENDA = :Tienda,
+            SUBSIDIARIA = :Subsidiaria
+        WHERE ID = :Id";
+
+                    Config.MyLog("ActualizarUsuarioCoordenada", "Update Query", updateQuery, true, $"{CorrelationId}_");
+
+                    context.Database.ExecuteSqlCommand(
+                        updateQuery,
+                        new OracleParameter("Email", usuario.Email),
+                        new OracleParameter("MaxDescuento", usuario.MaxDescuento),
+                        new OracleParameter("CicloCoordenada", usuario.CicloCoordenada),
+                        new OracleParameter("Tienda", usuario.Tienda),
+                        new OracleParameter("Subsidiaria", usuario.Subsidiaria),
+                        new OracleParameter("Id", usuario.Id)
+                    );
+
+                    context.Database.Connection.Close();
+                    Config.MyLog("ActualizarUsuarioCoordenada", "Success", "User updated successfully", AConfig.EnableLog, $"{CorrelationId}_");
+                }
+
+                FResponse.Response.Status = true;
+                FResponse.Response.Message = "Usuario actualizado exitosamente";
+                FResponse.StatusCode = HttpStatusCode.OK;
+            }
+            catch (Exception ex)
+            {
+                string ErrorMessage = ex.InnerException == null
+                    ? ex.Message
+                    : ex.InnerException.InnerException == null
+                        ? ex.InnerException.Message
+                        : ex.InnerException.InnerException.Message;
+
+                Config.MyLog("ActualizarUsuarioCoordenada", "Error", ErrorMessage, true, $"{CorrelationId}_");
+
+                FResponse.Response.Status = false;
+                FResponse.Response.Message = ErrorMessage;
+                FResponse.StatusCode = HttpStatusCode.InternalServerError;
+            }
+
+            return FResponse;
+        }
+
+        public FResponse EliminarUsuarioCoordenada(string Token, int Id, string CorrelationId)
+        {
+            FResponse FResponse = new FResponse();
+
+            try
+            {
+                Config.MyLog("EliminarUsuarioCoordenada", "Token", Token, AConfig.EnableLog, $"{CorrelationId}_");
+
+                FResponse RespDecrypt = DecryptToken(Token, CorrelationId);
+                if (!RespDecrypt.Response.Status)
+                    return RespDecrypt;
+
+                Session CSession = JsonConvert.DeserializeObject<Session>(RespDecrypt.Response.Result);
+
+                if (DateTime.Parse(CSession.FinalDate) < DateTime.Now)
+                {
+                    FResponse.Response = HandleError("EliminarUsuarioCoordenada", "The session has expired. Generate a new token", null, CorrelationId);
+                    FResponse.StatusCode = HttpStatusCode.Unauthorized;
+                    return FResponse;
+                }
+
+                using (var context = new ModelOracle(Connection, Schema))
+                {
+                    context.Database.Connection.Open();
+
+                    // Verificar si el usuario existe
+                    string checkQuery = "SELECT COUNT(1) FROM USUARIO_COORDENADA WHERE ID = :Id";
+                    Config.MyLog("EliminarUsuarioCoordenada", "Check User Query", checkQuery, true, $"{CorrelationId}_");
+
+                    int existingUserCount = context.Database.SqlQuery<int>(
+                        checkQuery,
+                        new OracleParameter("Id", Id)
+ 
+                    ).FirstOrDefault();
+
+                    if (existingUserCount == 0)
+                    {
+                        // Si el usuario no existe, devolver un error
+                        FResponse.Response.Status = false;
+                        FResponse.Response.Message = "El usuario no existe";
+                        FResponse.StatusCode = HttpStatusCode.NotFound;
+                        Config.MyLog("EliminarUsuarioCoordenada", "Error", "User does not exist", AConfig.EnableLog, $"{CorrelationId}_");
+                        return FResponse;
+                    }
+
+                    // Eliminar el usuario
+                    string deleteQuery = "DELETE FROM USUARIO_COORDENADA WHERE ID = :Id";
+                    Config.MyLog("EliminarUsuarioCoordenada", "Delete Query", deleteQuery, true, $"{CorrelationId}_");
+
+                    context.Database.ExecuteSqlCommand(
+                        deleteQuery,
+                         new OracleParameter("Id", Id)
+                    );
+
+                    context.Database.Connection.Close();
+                    Config.MyLog("EliminarUsuarioCoordenada", "Success", "User deleted successfully", AConfig.EnableLog, $"{CorrelationId}_");
+                }
+
+                FResponse.Response.Status = true;
+                FResponse.Response.Message = "Usuario eliminado exitosamente";
+                FResponse.StatusCode = HttpStatusCode.OK;
+            }
+            catch (Exception ex)
+            {
+                string ErrorMessage = ex.InnerException == null
+                    ? ex.Message
+                    : ex.InnerException.InnerException == null
+                        ? ex.InnerException.Message
+                        : ex.InnerException.InnerException.Message;
+
+                Config.MyLog("EliminarUsuarioCoordenada", "Error", ErrorMessage, true, $"{CorrelationId}_");
+
+                FResponse.Response.Status = false;
+                FResponse.Response.Message = ErrorMessage;
+                FResponse.StatusCode = HttpStatusCode.InternalServerError;
+            }
+
+            return FResponse;
+        }
+
+        public FResponse CrearCoordenada(string Token, Coordenada coordenada, string CorrelationId)
+        {
+            FResponse FResponse = new FResponse();
+
+            try
+            {
+                Config.MyLog("CrearCoordenada", "Token", Token, AConfig.EnableLog, $"{CorrelationId}_");
+
+                FResponse RespDecrypt = DecryptToken(Token, CorrelationId);
+                if (!RespDecrypt.Response.Status)
+                    return RespDecrypt;
+
+                Session CSession = JsonConvert.DeserializeObject<Session>(RespDecrypt.Response.Result);
+
+                if (DateTime.Parse(CSession.FinalDate) < DateTime.Now)
+                {
+                    FResponse.Response = HandleError("CrearCoordenada", "The session has expired. Generate a new token", null, CorrelationId);
+                    FResponse.StatusCode = HttpStatusCode.Unauthorized;
+                    return FResponse;
+                }
+
+                using (var context = new ModelOracle(Connection, Schema))
+                {
+                    context.Database.Connection.Open();
+
+                    // Verificar si el usuario ya existe
+                    string checkQuery = @"
+            SELECT COUNT(1) 
+            FROM COORDENADAS 
+            WHERE USUARIO_COORDENADA_ID = :UsuarioCoordenadaId";
+
+                    Config.MyLog("CrearCoordenada", "Check Usuario Query", checkQuery, true, $"{CorrelationId}_");
+
+                    int existingUserCount = context.Database.SqlQuery<int>(
+                        checkQuery,
+                        new OracleParameter("UsuarioCoordenadaId", coordenada.UsuarioCoordenadaId)
+                    ).FirstOrDefault();
+
+                    if (existingUserCount > 0)
+                    {
+                        // Si el usuario ya existe, devolver un error
+                        FResponse.Response.Status = false;
+                        FResponse.Response.Message = "El usuario ya existe";
+                        FResponse.StatusCode = HttpStatusCode.BadRequest;
+                        Config.MyLog("CrearCoordenada", "Error", "Usuario already exists", AConfig.EnableLog, $"{CorrelationId}_");
+                        return FResponse;
+                    }
+
+                    // Crear la coordenada
+                    string insertQuery = @"
+            INSERT INTO COORDENADAS (A1, B1, C1, D1, E1, F1, G1, H1, I1, J1, A2, B2, C2, D2, E2, F2, G2, H2, I2, J2, A3, B3, C3, D3, E3, F3, G3, H3, I3, J3, A4, B4, C4, D4, E4, F4, G4, H4, I4, J4, A5, B5, C5, D5, E5, F5, G5, H5, I5, J5, USUARIO_COORDENADA_ID)
+            VALUES (:A1, :B1, :C1, :D1, :E1, :F1, :G1, :H1, :I1, :J1, :A2, :B2, :C2, :D2, :E2, :F2, :G2, :H2, :I2, :J2, :A3, :B3, :C3, :D3, :E3, :F3, :G3, :H3, :I3, :J3, :A4, :B4, :C4, :D4, :E4, :F4, :G4, :H4, :I4, :J4, :A5, :B5, :C5, :D5, :E5, :F5, :G5, :H5, :I5, :J5, :UsuarioCoordenadaId)";
+
+                    Config.MyLog("CrearCoordenada", "Insert Query", insertQuery, true, $"{CorrelationId}_");
+
+                    context.Database.ExecuteSqlCommand(
+                        insertQuery,
+                        new OracleParameter("A1", coordenada.A1),
+                        new OracleParameter("B1", coordenada.B1),
+                        new OracleParameter("C1", coordenada.C1),
+                        new OracleParameter("D1", coordenada.D1),
+                        new OracleParameter("E1", coordenada.E1),
+                        new OracleParameter("F1", coordenada.F1),
+                        new OracleParameter("G1", coordenada.G1),
+                        new OracleParameter("H1", coordenada.H1),
+                        new OracleParameter("I1", coordenada.I1),
+                        new OracleParameter("J1", coordenada.J1),
+                        new OracleParameter("A2", coordenada.A2),
+                        new OracleParameter("B2", coordenada.B2),
+                        new OracleParameter("C2", coordenada.C2),
+                        new OracleParameter("D2", coordenada.D2),
+                        new OracleParameter("E2", coordenada.E2),
+                        new OracleParameter("F2", coordenada.F2),
+                        new OracleParameter("G2", coordenada.G2),
+                        new OracleParameter("H2", coordenada.H2),
+                        new OracleParameter("I2", coordenada.I2),
+                        new OracleParameter("J2", coordenada.J2),
+                        new OracleParameter("A3", coordenada.A3),
+                        new OracleParameter("B3", coordenada.B3),
+                        new OracleParameter("C3", coordenada.C3),
+                        new OracleParameter("D3", coordenada.D3),
+                        new OracleParameter("E3", coordenada.E3),
+                        new OracleParameter("F3", coordenada.F3),
+                        new OracleParameter("G3", coordenada.G3),
+                        new OracleParameter("H3", coordenada.H3),
+                        new OracleParameter("I3", coordenada.I3),
+                        new OracleParameter("J3", coordenada.J3),
+                        new OracleParameter("A4", coordenada.A4),
+                        new OracleParameter("B4", coordenada.B4),
+                        new OracleParameter("C4", coordenada.C4),
+                        new OracleParameter("D4", coordenada.D4),
+                        new OracleParameter("E4", coordenada.E4),
+                        new OracleParameter("F4", coordenada.F4),
+                        new OracleParameter("G4", coordenada.G4),
+                        new OracleParameter("H4", coordenada.H4),
+                        new OracleParameter("I4", coordenada.I4),
+                        new OracleParameter("J4", coordenada.J4),
+                        new OracleParameter("A5", coordenada.A5),
+                        new OracleParameter("B5", coordenada.B5),
+                        new OracleParameter("C5", coordenada.C5),
+                        new OracleParameter("D5", coordenada.D5),
+                        new OracleParameter("E5", coordenada.E5),
+                        new OracleParameter("F5", coordenada.F5),
+                        new OracleParameter("G5", coordenada.G5),
+                        new OracleParameter("H5", coordenada.H5),
+                        new OracleParameter("I5", coordenada.I5),
+                        new OracleParameter("J5", coordenada.J5),
+                        new OracleParameter("UsuarioCoordenadaId", coordenada.UsuarioCoordenadaId)
+                    );
+
+                    context.Database.Connection.Close();
+                    Config.MyLog("CrearCoordenada", "Success", "Coordenada created successfully", AConfig.EnableLog, $"{CorrelationId}_");
+                }
+
+                FResponse.Response.Status = true;
+                FResponse.Response.Message = "Coordenada creada exitosamente";
+                FResponse.StatusCode = HttpStatusCode.OK;
+            }
+            catch (Exception ex)
+            {
+                string ErrorMessage = ex.InnerException == null
+                    ? ex.Message
+                    : ex.InnerException.InnerException == null
+                        ? ex.InnerException.Message
+                        : ex.InnerException.InnerException.Message;
+
+                Config.MyLog("CrearCoordenada", "Error", ErrorMessage, true, $"{CorrelationId}_");
+
+                FResponse.Response.Status = false;
+                FResponse.Response.Message = ErrorMessage;
+                FResponse.StatusCode = HttpStatusCode.InternalServerError;
+            }
+
+            return FResponse;
+        }
+
+        public FResponse ActualizarCoordenada(string Token, Coordenada coordenada, string CorrelationId)
+        {
+            FResponse FResponse = new FResponse();
+
+            try
+            {
+                Config.MyLog("ActualizarCoordenada", "Token", Token, AConfig.EnableLog, $"{CorrelationId}_");
+
+                FResponse RespDecrypt = DecryptToken(Token, CorrelationId);
+                if (!RespDecrypt.Response.Status)
+                    return RespDecrypt;
+
+                Session CSession = JsonConvert.DeserializeObject<Session>(RespDecrypt.Response.Result);
+
+                if (DateTime.Parse(CSession.FinalDate) < DateTime.Now)
+                {
+                    FResponse.Response = HandleError("ActualizarCoordenada", "The session has expired. Generate a new token", null, CorrelationId);
+                    FResponse.StatusCode = HttpStatusCode.Unauthorized;
+                    return FResponse;
+                }
+
+                using (var context = new ModelOracle(Connection, Schema))
+                {
+                    context.Database.Connection.Open();
+
+                    // Verificar si la coordenada existe
+                    string checkQuery = @"
+            SELECT COUNT(1) 
+            FROM COORDENADAS 
+            WHERE ID = :Id";
+
+                    Config.MyLog("ActualizarCoordenada", "Check Coordenada Query", checkQuery, true, $"{CorrelationId}_");
+
+                    int existingCoordenadaCount = context.Database.SqlQuery<int>(
+                        checkQuery,
+                        new OracleParameter("Id", coordenada.Id)
+                    ).FirstOrDefault();
+
+                    if (existingCoordenadaCount == 0)
+                    {
+                        // Si la coordenada no existe, devolver un error
+                        FResponse.Response.Status = false;
+                        FResponse.Response.Message = "La coordenada no existe";
+                        FResponse.StatusCode = HttpStatusCode.BadRequest;
+                        Config.MyLog("ActualizarCoordenada", "Error", "Coordenada does not exist", AConfig.EnableLog, $"{CorrelationId}_");
+                        return FResponse;
+                    }
+
+                    // Actualizar la coordenada
+                    string updateQuery = @"
+            UPDATE COORDENADAS 
+            SET A1 = :A1, B1 = :B1, C1 = :C1, D1 = :D1, E1 = :E1, F1 = :F1, G1 = :G1, H1 = :H1, I1 = :I1, J1 = :J1, 
+                A2 = :A2, B2 = :B2, C2 = :C2, D2 = :D2, E2 = :E2, F2 = :F2, G2 = :G2, H2 = :H2, I2 = :I2, J2 = :J2, 
+                A3 = :A3, B3 = :B3, C3 = :C3, D3 = :D3, E3 = :E3, F3 = :F3, G3 = :G3, H3 = :H3, I3 = :I3, J3 = :J3, 
+                A4 = :A4, B4 = :B4, C4 = :C4, D4 = :D4, E4 = :E4, F4 = :F4, G4 = :G4, H4 = :H4, I4 = :I4, J4 = :J4, 
+                A5 = :A5, B5 = :B5, C5 = :C5, D5 = :D5, E5 = :E5, F5 = :F5, G5 = :G5, H5 = :H5, I5 = :I5, J5 = :J5, 
+                USUARIO_COORDENADA_ID = :UsuarioCoordenadaId
+            WHERE ID = :Id";
+
+                    Config.MyLog("ActualizarCoordenada", "Update Query", updateQuery, true, $"{CorrelationId}_");
+
+                    context.Database.ExecuteSqlCommand(
+                        updateQuery,
+                        new OracleParameter("A1", coordenada.A1),
+                        new OracleParameter("B1", coordenada.B1),
+                        new OracleParameter("C1", coordenada.C1),
+                        new OracleParameter("D1", coordenada.D1),
+                        new OracleParameter("E1", coordenada.E1),
+                        new OracleParameter("F1", coordenada.F1),
+                        new OracleParameter("G1", coordenada.G1),
+                        new OracleParameter("H1", coordenada.H1),
+                        new OracleParameter("I1", coordenada.I1),
+                        new OracleParameter("J1", coordenada.J1),
+                        new OracleParameter("A2", coordenada.A2),
+                        new OracleParameter("B2", coordenada.B2),
+                        new OracleParameter("C2", coordenada.C2),
+                        new OracleParameter("D2", coordenada.D2),
+                        new OracleParameter("E2", coordenada.E2),
+                        new OracleParameter("F2", coordenada.F2),
+                        new OracleParameter("G2", coordenada.G2),
+                        new OracleParameter("H2", coordenada.H2),
+                        new OracleParameter("I2", coordenada.I2),
+                        new OracleParameter("J2", coordenada.J2),
+                        new OracleParameter("A3", coordenada.A3),
+                        new OracleParameter("B3", coordenada.B3),
+                        new OracleParameter("C3", coordenada.C3),
+                        new OracleParameter("D3", coordenada.D3),
+                        new OracleParameter("E3", coordenada.E3),
+                        new OracleParameter("F3", coordenada.F3),
+                        new OracleParameter("G3", coordenada.G3),
+                        new OracleParameter("H3", coordenada.H3),
+                        new OracleParameter("I3", coordenada.I3),
+                        new OracleParameter("J3", coordenada.J3),
+                        new OracleParameter("A4", coordenada.A4),
+                        new OracleParameter("B4", coordenada.B4),
+                        new OracleParameter("C4", coordenada.C4),
+                        new OracleParameter("D4", coordenada.D4),
+                        new OracleParameter("E4", coordenada.E4),
+                        new OracleParameter("F4", coordenada.F4),
+                        new OracleParameter("G4", coordenada.G4),
+                        new OracleParameter("H4", coordenada.H4),
+                        new OracleParameter("I4", coordenada.I4),
+                        new OracleParameter("J4", coordenada.J4),
+                        new OracleParameter("A5", coordenada.A5),
+                        new OracleParameter("B5", coordenada.B5),
+                        new OracleParameter("C5", coordenada.C5),
+                        new OracleParameter("D5", coordenada.D5),
+                        new OracleParameter("E5", coordenada.E5),
+                        new OracleParameter("F5", coordenada.F5),
+                        new OracleParameter("G5", coordenada.G5),
+                        new OracleParameter("H5", coordenada.H5),
+                        new OracleParameter("I5", coordenada.I5),
+                        new OracleParameter("J5", coordenada.J5),
+                        new OracleParameter("UsuarioCoordenadaId", coordenada.UsuarioCoordenadaId),
+                        new OracleParameter("Id", coordenada.Id)
+                    );
+
+                    context.Database.Connection.Close();
+                    Config.MyLog("ActualizarCoordenada", "Success", "Coordenada updated successfully", AConfig.EnableLog, $"{CorrelationId}_");
+                }
+
+                FResponse.Response.Status = true;
+                FResponse.Response.Message = "Coordenada actualizada exitosamente";
+                FResponse.StatusCode = HttpStatusCode.OK;
+            }
+            catch (Exception ex)
+            {
+                string ErrorMessage = ex.InnerException == null
+                    ? ex.Message
+                    : ex.InnerException.InnerException == null
+                        ? ex.InnerException.Message
+                        : ex.InnerException.InnerException.Message;
+
+                Config.MyLog("ActualizarCoordenada", "Error", ErrorMessage, true, $"{CorrelationId}_");
+
+                FResponse.Response.Status = false;
+                FResponse.Response.Message = ErrorMessage;
+                FResponse.StatusCode = HttpStatusCode.InternalServerError;
+            }
+
+            return FResponse;
+        }
+
+        public FResponse GetUsuarioCoordenada(string Token, int id, string CorrelationId)
+        {
+            FResponse FResponse = new FResponse();
+
+            try
+            {
+                Config.MyLog("GetUsuarioCoordenada", "Token", Token, AConfig.EnableLog, $"{CorrelationId}_");
+
+                FResponse RespDecrypt = DecryptToken(Token, CorrelationId);
+                if (!RespDecrypt.Response.Status)
+                    return RespDecrypt;
+
+                Session CSession = JsonConvert.DeserializeObject<Session>(RespDecrypt.Response.Result);
+
+                if (DateTime.Parse(CSession.FinalDate) < DateTime.Now)
+                {
+                    FResponse.Response = HandleError("GetUsuarioCoordenada", "The session has expired. Generate a new token", null, CorrelationId);
+                    FResponse.StatusCode = HttpStatusCode.Unauthorized;
+                    return FResponse;
+                }
+
+                using (var connection = new OracleConnection(Connection))
+                {
+                    connection.Open();
+
+                    string query = "SELECT * FROM COORDENADAS WHERE USUARIO_COORDENADA_ID = :Id";
+                    Config.MyLog("GetUsuarioCoordenada", "Query", query, true, $"{CorrelationId}_");
+
+                    using (var command = new OracleCommand(query, connection))
+                    {
+                        command.Parameters.Add(new OracleParameter("Id", id));
+
+                        using (var reader = command.ExecuteReader())
+                        {
+                            var coordenadas = new List<Coordenada>();
+
+                            while (reader.Read())
+                            {
+                                coordenadas.Add(new Coordenada
+                                {
+                                    Id = reader.GetInt32(0),
+                                    A1 = reader.IsDBNull(1) ? (int?)null : reader.GetInt32(1),
+                                    B1 = reader.IsDBNull(2) ? (int?)null : reader.GetInt32(2),
+                                    C1 = reader.IsDBNull(3) ? (int?)null : reader.GetInt32(3),
+                                    D1 = reader.IsDBNull(4) ? (int?)null : reader.GetInt32(4),
+                                    E1 = reader.IsDBNull(5) ? (int?)null : reader.GetInt32(5),
+                                    F1 = reader.IsDBNull(6) ? (int?)null : reader.GetInt32(6),
+                                    G1 = reader.IsDBNull(7) ? (int?)null : reader.GetInt32(7),
+                                    H1 = reader.IsDBNull(8) ? (int?)null : reader.GetInt32(8),
+                                    I1 = reader.IsDBNull(9) ? (int?)null : reader.GetInt32(9),
+                                    J1 = reader.IsDBNull(10) ? (int?)null : reader.GetInt32(10),
+                                    A2 = reader.IsDBNull(11) ? (int?)null : reader.GetInt32(11),
+                                    B2 = reader.IsDBNull(12) ? (int?)null : reader.GetInt32(12),
+                                    C2 = reader.IsDBNull(13) ? (int?)null : reader.GetInt32(13),
+                                    D2 = reader.IsDBNull(14) ? (int?)null : reader.GetInt32(14),
+                                    E2 = reader.IsDBNull(15) ? (int?)null : reader.GetInt32(15),
+                                    F2 = reader.IsDBNull(16) ? (int?)null : reader.GetInt32(16),
+                                    G2 = reader.IsDBNull(17) ? (int?)null : reader.GetInt32(17),
+                                    H2 = reader.IsDBNull(18) ? (int?)null : reader.GetInt32(18),
+                                    I2 = reader.IsDBNull(19) ? (int?)null : reader.GetInt32(19),
+                                    J2 = reader.IsDBNull(20) ? (int?)null : reader.GetInt32(20),
+                                    A3 = reader.IsDBNull(21) ? (int?)null : reader.GetInt32(21),
+                                    B3 = reader.IsDBNull(22) ? (int?)null : reader.GetInt32(22),
+                                    C3 = reader.IsDBNull(23) ? (int?)null : reader.GetInt32(23),
+                                    D3 = reader.IsDBNull(24) ? (int?)null : reader.GetInt32(24),
+                                    E3 = reader.IsDBNull(25) ? (int?)null : reader.GetInt32(25),
+                                    F3 = reader.IsDBNull(26) ? (int?)null : reader.GetInt32(26),
+                                    G3 = reader.IsDBNull(27) ? (int?)null : reader.GetInt32(27),
+                                    H3 = reader.IsDBNull(28) ? (int?)null : reader.GetInt32(28),
+                                    I3 = reader.IsDBNull(29) ? (int?)null : reader.GetInt32(29),
+                                    J3 = reader.IsDBNull(30) ? (int?)null : reader.GetInt32(30),
+                                    A4 = reader.IsDBNull(31) ? (int?)null : reader.GetInt32(31),
+                                    B4 = reader.IsDBNull(32) ? (int?)null : reader.GetInt32(32),
+                                    C4 = reader.IsDBNull(33) ? (int?)null : reader.GetInt32(33),
+                                    D4 = reader.IsDBNull(34) ? (int?)null : reader.GetInt32(34),
+                                    E4 = reader.IsDBNull(35) ? (int?)null : reader.GetInt32(35),
+                                    F4 = reader.IsDBNull(36) ? (int?)null : reader.GetInt32(36),
+                                    G4 = reader.IsDBNull(37) ? (int?)null : reader.GetInt32(37),
+                                    H4 = reader.IsDBNull(38) ? (int?)null : reader.GetInt32(38),
+                                    I4 = reader.IsDBNull(39) ? (int?)null : reader.GetInt32(39),
+                                    J4 = reader.IsDBNull(40) ? (int?)null : reader.GetInt32(40),
+                                    A5 = reader.IsDBNull(41) ? (int?)null : reader.GetInt32(41),
+                                    B5 = reader.IsDBNull(42) ? (int?)null : reader.GetInt32(42),
+                                    C5 = reader.IsDBNull(43) ? (int?)null : reader.GetInt32(43),
+                                    D5 = reader.IsDBNull(44) ? (int?)null : reader.GetInt32(44),
+                                    E5 = reader.IsDBNull(45) ? (int?)null : reader.GetInt32(45),
+                                    F5 = reader.IsDBNull(46) ? (int?)null : reader.GetInt32(46),
+                                    G5 = reader.IsDBNull(47) ? (int?)null : reader.GetInt32(47),
+                                    H5 = reader.IsDBNull(48) ? (int?)null : reader.GetInt32(48),
+                                    I5 = reader.IsDBNull(49) ? (int?)null : reader.GetInt32(49),
+                                    J5 = reader.IsDBNull(50) ? (int?)null : reader.GetInt32(50),
+                                    UsuarioCoordenadaId = reader.GetString(51)
+                                });
+                            }
+
+                            if (coordenadas == null || !coordenadas.Any())
+                            {
+                                FResponse.Response.Status = false;
+                                FResponse.Response.Message = "Coordenadas no encontradas";
+                                FResponse.StatusCode = HttpStatusCode.NotFound;
+                                Config.MyLog("GetUsuarioCoordenada", "Not Found", "Coordenadas no encontradas", AConfig.EnableLog, $"{CorrelationId}_");
+                            }
+                            else
+                            {
+                                FResponse.Response.Status = true;
+                                FResponse.Response.Message = "Coordenadas encontradas";
+                                FResponse.Response.Result = coordenadas;
+                                FResponse.StatusCode = HttpStatusCode.OK;
+                                Config.MyLog("GetUsuarioCoordenada", "Success", "Coordenadas encontradas", AConfig.EnableLog, $"{CorrelationId}_");
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                string ErrorMessage = ex.InnerException == null
+                    ? ex.Message
+                    : ex.InnerException.InnerException == null
+                        ? ex.InnerException.Message
+                        : ex.InnerException.InnerException.Message;
+
+                Config.MyLog("GetUsuarioCoordenada", "Error", ErrorMessage, true, $"{CorrelationId}_");
+
+                FResponse.Response.Status = false;
+                FResponse.Response.Message = ErrorMessage;
+                FResponse.StatusCode = HttpStatusCode.InternalServerError;
             }
 
             return FResponse;

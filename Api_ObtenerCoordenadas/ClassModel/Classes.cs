@@ -200,7 +200,6 @@ namespace ClassModel
         public string Tienda { get; set; }
         public int MaxDescuento { get; set; }
         public int CicloCoordenada { get; set; }
-        public string Subsidiaria { get; set; }
     }
 
     public class UsuarioControlDescuento
@@ -266,7 +265,13 @@ namespace ClassModel
         public int? H5 { get; set; }
         public int? I5 { get; set; }
         public int? J5 { get; set; }
-        public string UsuarioCoordenadaId { get; set; }
+        public int UsuarioCoordenadaId { get; set; }
+        public string Email { get; set; }
+        public string EmployeeSid { get; set; }
+        public string Tienda { get; set; }
+        public int MaxDescuento { get; set; }
+        public int CicloCoordenada { get; set; }
+        public string Subsidiaria { get; set; }
     }
 
     public class CoordenadaRequest
@@ -356,7 +361,6 @@ namespace ClassModel
         public string Tienda { get; set; }
         public int MaxDescuento { get; set; }
         public int CicloCoordenada { get; set; }
-        public string SbsSid { get; set; }
     }
     public class UserCoordenadaDeleteRequest
     {

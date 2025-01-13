@@ -10,7 +10,7 @@ using Newtonsoft.Json.Linq;
 
 namespace WebApi.Controllers
 {
-    [RoutePrefix("Interface/Login")]
+    [RoutePrefix("Api/v1/login")]
     public class LoginController : ApiController
     {
         XMLConf Config = new XMLConf();
@@ -144,91 +144,5 @@ namespace WebApi.Controllers
             return Content(FResponse.StatusCode, FResponse.Response);
         }
 
-        [HttpPost]
-        [Route("Login")]
-        public IHttpActionResult Login(LoginBody Login)
-        {
-            string CorrelationId = Request.GetCorrelationId().ToString();
-
-            Config.MyLog(
-                "Login",
-                "Url",
-                Request.RequestUri.AbsoluteUri,
-                ApiConfig.EnableLog,
-                $"{CorrelationId}_"
-            );
-
-            Config.MyLog(
-                "Login",
-                "Request",
-                JsonConvert.SerializeObject(Login, Formatting.None),
-                ApiConfig.EnableLog,
-                $"{CorrelationId}_"
-            );
-
-            if (Login == null)
-            {
-                Response Response = new Response
-                {
-                    Status = false,
-                    Message = "The body is invalid or missing"
-                };
-                Config.MyLog(
-                    "Login",
-                    "Error",
-                    Response.Message,
-                    ApiConfig.EnableLog,
-                    $"{CorrelationId}_"
-                );
-                return Content(HttpStatusCode.BadRequest, Response);
-            }
-
-            FResponse FResponse = FC.LoginUsuarioControlDescuento(Login?.User, Login?.Password, CorrelationId);
-
-            return Content(FResponse.StatusCode, FResponse.Response);
-        }
-
-        [HttpGet]
-        [Route("GetEncript")]
-        public IHttpActionResult GetEncript()
-        {
-
-            FResponse FResponse = FC.getKeyEncript();
-
-            return Content(FResponse.StatusCode, FResponse.Response);
-        }
-
-        [HttpGet]
-        [Route("GetValidToken")]
-        public IHttpActionResult GetValidToken()
-        {
-            string CorrelationId = Request.GetCorrelationId().ToString();
-            Config.MyLog(
-                "GetValidToken",
-                "Url",
-                Request.RequestUri.AbsoluteUri,
-                ApiConfig.EnableLog,
-                $"{CorrelationId}_"
-            );
-
-
-            if (Request.Headers.Authorization == null)
-            {
-                Response Response = FC.HandleError(
-                    "GetValidToken",
-                    "The authentication token is invalid or missing",
-                    null,
-                    CorrelationId
-                );
-                return Content(HttpStatusCode.Unauthorized, Response);
-            }
-
-            FResponse FResponse = FC.GetValidToken(
-                Request.Headers.Authorization?.Parameter,
-                CorrelationId
-            );
-
-            return Content(FResponse.StatusCode, FResponse.Response);
-        }
     }
 }

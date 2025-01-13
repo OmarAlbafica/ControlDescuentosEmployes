@@ -1,26 +1,28 @@
-﻿using ClassModel;
+﻿using CConfig;
+using ClassModel;
 using Newtonsoft.Json.Linq;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
+using System.Net;
 using System.Web;
 using System.Web.Http;
-using CConfig;
-using System.Net;
-using System.Net.Http;
+using System.Web.Mvc;
 
 namespace WebApi.Controllers
 {
-    [RoutePrefix("Users")]
-    public class UsersController : ApiController
+ 
+    [RoutePrefix("Cartilla")]
+    public class CartillaController : ApiController
     {
         XMLConf Config = new XMLConf();
         Functions FC = new Functions();
         ApiConfig ApiConfig = new ApiConfig();
         ServiceConfig ServiceConfig = new ServiceConfig();
-        public  UsersController()
+        public CartillaController()
         {
             try
             {
@@ -90,13 +92,48 @@ namespace WebApi.Controllers
             return Content(HttpStatusCode.OK, Response);
         }
 
-        [HttpPost]
-        [Route("GetUsers")]
-        public IHttpActionResult GetUsers([FromBody] SearchRequest request)
+        [HttpGet]
+        [Route("GetStoresAndEmployees")]
+        public IHttpActionResult GetStoresAndEmployees()
         {
             string CorrelationId = Request.GetCorrelationId().ToString();
             Config.MyLog(
-                "GetUsers",
+                "GetStoresAndEmployees",
+                "Url",
+                Request.RequestUri.AbsoluteUri,
+                ApiConfig.EnableLog,
+                $"{CorrelationId}_"
+            );
+
+
+            if (Request.Headers.Authorization == null)
+            {
+                Response Response = FC.HandleError(
+                    "GetStoresAndEmployees",
+                    "The authentication token is invalid or missing",
+                    null,
+                    CorrelationId
+                );
+                return Content(HttpStatusCode.Unauthorized, Response);
+            }
+
+
+
+            FResponse FResponse = FC.GetStoresAndEmployees(
+                Request.Headers.Authorization?.Parameter,
+                CorrelationId
+            );
+
+            return Content(FResponse.StatusCode, FResponse.Response);
+        }
+
+        [HttpPost]
+        [Route("GetUsersFromCoordenada")]
+        public IHttpActionResult GetUsersFromCoordenada([FromBody] SearchRequest request)
+        {
+            string CorrelationId = Request.GetCorrelationId().ToString();
+            Config.MyLog(
+                "GetUsersFromCoordenada",
                 "Url",
                 Request.RequestUri.AbsoluteUri,
                 ApiConfig.EnableLog,
@@ -106,7 +143,7 @@ namespace WebApi.Controllers
             if (Request.Headers.Authorization == null)
             {
                 Response Response = FC.HandleError(
-                    "GetUsers",
+                    "GetUsersFromCoordenada",
                     "The authentication token is invalid or missing",
                     null,
                     CorrelationId
@@ -114,7 +151,7 @@ namespace WebApi.Controllers
                 return Content(HttpStatusCode.Unauthorized, Response);
             }
 
-            FResponse FResponse = FC.GetUsers(
+            FResponse FResponse = FC.GetUsersFromCoordenada(
                 Request.Headers.Authorization?.Parameter,
                 CorrelationId,
                 request?.Search
@@ -124,12 +161,12 @@ namespace WebApi.Controllers
         }
 
         [HttpPost]
-        [Route("DeleteUser")]
-        public IHttpActionResult DeleteUser([FromBody] UserDeleteRequest request)
+        [Route("CreateUserCoordenada")]
+        public IHttpActionResult CreateUserCoordenada([FromBody] UserCoordenadaRequest request)
         {
             string CorrelationId = Request.GetCorrelationId().ToString();
             Config.MyLog(
-                "DeleteUser",
+                "CreateUserCoordenada",
                 "Url",
                 Request.RequestUri.AbsoluteUri,
                 ApiConfig.EnableLog,
@@ -139,7 +176,7 @@ namespace WebApi.Controllers
             if (Request.Headers.Authorization == null)
             {
                 Response Response = FC.HandleError(
-                    "DeleteUser",
+                    "CreateUserCoordenada",
                     "The authentication token is invalid or missing",
                     null,
                     CorrelationId
@@ -147,22 +184,30 @@ namespace WebApi.Controllers
                 return Content(HttpStatusCode.Unauthorized, Response);
             }
 
-            FResponse FResponse = FC.DeleteUser(
+            FResponse FResponse = FC.CrearUsuarioCoordenada(
                 Request.Headers.Authorization?.Parameter,
-                CorrelationId,
-                request.Id
+                new UsuarioCoordenada
+                {
+                    Email = request.Email,
+                    Sid = request.Sid,
+                    Tienda = request.Tienda,
+                    MaxDescuento = request.MaxDescuento,
+                    CicloCoordenada = request.CicloCoordenada,
+                    Subsidiaria= request.SbsSid
+                },
+                CorrelationId
             );
 
             return Content(FResponse.StatusCode, FResponse.Response);
         }
 
         [HttpPost]
-        [Route("UpdateUser")]
-        public IHttpActionResult UpdateUser([FromBody] UserUpdateRequest request)
+        [Route("DeleteUserCoordenada")]
+        public IHttpActionResult DeleteUserCoordenada([FromBody] UserCoordenadaDeleteRequest request)
         {
             string CorrelationId = Request.GetCorrelationId().ToString();
             Config.MyLog(
-                "UpdateUser",
+                "DeleteUserCoordenada",
                 "Url",
                 Request.RequestUri.AbsoluteUri,
                 ApiConfig.EnableLog,
@@ -172,7 +217,7 @@ namespace WebApi.Controllers
             if (Request.Headers.Authorization == null)
             {
                 Response Response = FC.HandleError(
-                    "UpdateUser",
+                    "DeleteUserCoordenada",
                     "The authentication token is invalid or missing",
                     null,
                     CorrelationId
@@ -180,22 +225,22 @@ namespace WebApi.Controllers
                 return Content(HttpStatusCode.Unauthorized, Response);
             }
 
-            FResponse FResponse = FC.UpdateUser(
+            FResponse FResponse = FC.EliminarUsuarioCoordenada(
                 Request.Headers.Authorization?.Parameter,
-                CorrelationId,
-                request
+                request.Id,
+                CorrelationId
             );
 
             return Content(FResponse.StatusCode, FResponse.Response);
         }
 
         [HttpPost]
-        [Route("CreateUser")]
-        public IHttpActionResult CreateUser([FromBody] UserCreateRequest request)
+        [Route("UpdateUserCoordenada")]
+        public IHttpActionResult UpdateUserCoordenada([FromBody] UserCoordenadaRequest request)
         {
             string CorrelationId = Request.GetCorrelationId().ToString();
             Config.MyLog(
-                "CreateUser",
+                "UpdateUserCoordenada",
                 "Url",
                 Request.RequestUri.AbsoluteUri,
                 ApiConfig.EnableLog,
@@ -205,7 +250,7 @@ namespace WebApi.Controllers
             if (Request.Headers.Authorization == null)
             {
                 Response Response = FC.HandleError(
-                    "CreateUser",
+                    "UpdateUserCoordenada",
                     "The authentication token is invalid or missing",
                     null,
                     CorrelationId
@@ -213,13 +258,23 @@ namespace WebApi.Controllers
                 return Content(HttpStatusCode.Unauthorized, Response);
             }
 
-            FResponse FResponse = FC.CreateUser(
+            FResponse FResponse = FC.ActualizarUsuarioCoordenada(
                 Request.Headers.Authorization?.Parameter,
-                CorrelationId,
-                request
+                new UsuarioCoordenada
+                {
+                    Id = request.Id,
+                    Email = request.Email,
+                    Sid = request.Sid,
+                    Tienda = request.Tienda,
+                    MaxDescuento = request.MaxDescuento,
+                    CicloCoordenada = request.CicloCoordenada,
+                    Subsidiaria = request.SbsSid
+                },
+                CorrelationId
             );
 
             return Content(FResponse.StatusCode, FResponse.Response);
         }
+
     }
 }
